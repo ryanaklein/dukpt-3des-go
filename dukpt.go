@@ -10,19 +10,27 @@ import (
 )
 
 var keyMask []byte
+var dekMask []byte
 var ksnMask []byte
 
 func main() {
 
 	keyMask, _ = hex.DecodeString("C0C0C0C000000000C0C0C0C000000000")
+	dekMask, _ = hex.DecodeString("0000000000FF00000000000000FF0000")
 	ksnMask, _ = hex.DecodeString("FFFFFFFFFFFFFFE00000")
 
 	bdk, _ := hex.DecodeString("0123456789ABCDEFFEDCBA9876543210")
-	ksn, _ := hex.DecodeString("FFFF9876543210E00008")
+	ksn, _ := hex.DecodeString("88888851400018400003")
 
 	ipek := createIPEK(bdk, ksn)
 	fmt.Printf("ipek: %x\n", ipek)
-	createSessionKey(ipek, ksn)
+	sessionKey := createSessionKey(ipek, ksn)
+
+	plaintext, _ := hex.DecodeString("57164111111111111111D301244455556660060606060606")
+
+	finalResult := tripleDesEncrypt(sessionKey, plaintext)
+
+	fmt.Printf("Final Result: %x\n", finalResult)
 
 }
 
@@ -43,9 +51,9 @@ func createIPEK(bdk, ksn []byte) []byte {
 
 }
 
-func createSessionKey(ipek, ksn []byte) {
+func createSessionKey(ipek, ksn []byte) []byte {
 
-	sessionKeyMask, _ := hex.DecodeString("00000000000000FF00000000000000FF")
+	sessionKeyMask, _ := hex.DecodeString("0000000000FF00000000000000FF0000")
 
 	fmt.Printf("ipek: %x\n", ipek)
 
@@ -56,6 +64,8 @@ func createSessionKey(ipek, ksn []byte) {
 	sessionKey, _ := bitwiseXorBytes(key, sessionKeyMask)
 
 	fmt.Printf("session key: %x\n", sessionKey)
+
+	return sessionKey
 
 }
 
@@ -87,7 +97,7 @@ func deriveKey(ipek, ksn []byte) []byte {
 
 func generateKey(key, ksn []byte) []byte {
 
-	maskedKey, _ := bitwiseXorBytes(key, keyMask)
+	maskedKey, _ := bitwiseXorBytes(key, dekMask)
 
 	encryptLeft := encryptRegister(maskedKey, ksn)
 	encryptRight := encryptRegister(key, ksn)
@@ -120,9 +130,9 @@ func encryptRegister(key, reg []byte) []byte {
 
 	fmt.Printf("key reg: %x\n", keyReg)
 
-	tripleDESResult := desEncrypt(keyLeft, keyReg)
+	// tripleDESResult := desEncrypt(keyLeft, keyReg)
 
-	// tripleDESResult := tripleDesEncrypt(keyLeft, keyReg)
+	tripleDESResult := tripleDesEncrypt(keyLeft, keyReg)
 
 	fmt.Printf("3des result: %x\n", tripleDESResult)
 
