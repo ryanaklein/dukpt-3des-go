@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/cipher"
 	"crypto/des"
-	"encoding/binary"
 	"fmt"
 	"math/big"
 )
@@ -24,11 +23,11 @@ func main() {
 	bdk.SetString("0123456789ABCDEFFEDCBA9876543210", 16)
 
 	ksn := new(big.Int)
-	ksn.SetString("FFFF9876543210E00008", 16)
+	ksn.SetString("88888851400018400003", 16)
 
 	ipek := createIPEK(*bdk, *ksn)
 	fmt.Printf("ipek: %x\n", &ipek)
-	createSessionKey(ipek, *ksn)
+	createDigitalKey(ipek, *ksn)
 
 }
 
@@ -45,6 +44,31 @@ func createIPEK(bdk, ksn big.Int) big.Int {
 
 	ipek := new(big.Int).Or(cipherTextLeft, cipherTextRight)
 	return *ipek
+
+}
+
+func createDigitalKey(ipek, ksn big.Int) {
+	digitalKeyMask, _ := new(big.Int).SetString("0000000000FF00000000000000FF0000", 16)
+
+	// Derive the base key
+	key := deriveKey(ipek, ksn)
+
+	key.Xor(&key, digitalKeyMask)
+
+	leftMask, _ := new(big.Int).SetString("FFFFFFFFFFFFFFFF0000000000000000", 16)
+	leftKey := new(big.Int).And(&key, leftMask)
+	leftKey.Rsh(leftKey, 64)
+
+	rightMask, _ := new(big.Int).SetString("FFFFFFFFFFFFFFFF", 16)
+	rightKey := new(big.Int).And(&key, rightMask)
+
+	cipherTextLeft := new(big.Int).SetBytes(tripleDesEncrypt(key.Bytes(), leftKey.Bytes()))
+	cipherTextLeft.Lsh(cipherTextLeft, 64)
+	cipherTextRight := new(big.Int).SetBytes(tripleDesEncrypt(key.Bytes(), rightKey.Bytes()))
+
+	result := new(big.Int).Or(cipherTextLeft, cipherTextRight)
+
+	fmt.Printf("dek: %x\n", result)
 
 }
 
@@ -109,8 +133,8 @@ func encryptRegister(key, reg big.Int) big.Int {
 
 	keyReg := new(big.Int).Xor(keyRight, &reg)
 
-	tripleDESResult := new(big.Int).SetBytes(desEncrypt(keyLeft.Bytes(), keyReg.Bytes()))
-	// tripleDESResult := tripleDesEncrypt(keyLeft, keyReg)
+	// tripleDESResult := new(big.Int).SetBytes(desEncrypt(keyLeft.Bytes(), keyReg.Bytes()))
+	tripleDESResult := new(big.Int).SetBytes(tripleDesEncrypt(keyLeft.Bytes(), keyReg.Bytes()))
 
 	encryptionResult := new(big.Int).Xor(keyRight, tripleDESResult)
 
@@ -177,134 +201,4 @@ func padPKCS7(data []byte, blockSize int) []byte {
 	padding := blockSize - len(data)%blockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(data, padtext...)
-}
-
-func bitwiseAndBytes(a, b []byte) ([]byte, error) {
-	if len(a) != len(b) {
-		return nil, fmt.Errorf("input slices must have the same length")
-	}
-	result := make([]byte, len(a))
-	for i := range a {
-		result[i] = a[i] & b[i]
-	}
-	return result, nil
-}
-
-func bitwiseOrBytes(a, b []byte) ([]byte, error) {
-	if len(a) != len(b) {
-		return nil, fmt.Errorf("input slices must have the same length")
-	}
-	result := make([]byte, len(a))
-	for i := range a {
-		result[i] = a[i] | b[i]
-	}
-	return result, nil
-}
-
-func bitwiseXorBytes(a, b []byte) ([]byte, error) {
-	if len(a) != len(b) {
-		return nil, fmt.Errorf("input slices must have the same length")
-	}
-	result := make([]byte, len(a))
-	for i := range a {
-		result[i] = a[i] ^ b[i]
-	}
-	return result, nil
-}
-
-func bitwiseNotBytes(data []byte) []byte {
-	result := make([]byte, len(data))
-	for i := range data {
-		result[i] = ^data[i]
-	}
-	return result
-}
-
-func leftShiftBytes(data []byte, shift uint) []byte {
-	if shift == 0 || len(data) == 0 {
-		return data
-	}
-
-	// Create a new slice to store the result
-	result := make([]byte, len(data))
-
-	// Calculate the byte and bit shifts
-	byteShift := int(shift / 8) // Number of whole bytes to shift
-	bitShift := shift % 8       // Number of bits to shift within a byte
-
-	for i := 0; i < len(data); i++ {
-		if i+byteShift < len(data) {
-			// Shift current byte by bitShift and add overflow from the next byte
-			result[i] = data[i+byteShift] << bitShift
-			if i+byteShift+1 < len(data) && bitShift > 0 {
-				result[i] |= data[i+byteShift+1] >> (8 - bitShift)
-			}
-		}
-	}
-
-	return result
-}
-
-func rightShiftBytes(data []byte, shift uint) []byte {
-	if shift == 0 || len(data) == 0 {
-		return data
-	}
-
-	result := make([]byte, len(data))
-	byteShift := int(shift / 8)
-	bitShift := shift % 8
-
-	for i := len(data) - 1; i >= 0; i-- {
-		if i-byteShift >= 0 {
-			result[i] = data[i-byteShift] >> bitShift
-			if i-byteShift-1 >= 0 && bitShift > 0 {
-				result[i] |= data[i-byteShift-1] << (8 - bitShift)
-			}
-		}
-	}
-	return result
-}
-
-func trimLeadingZeros(data []byte) []byte {
-	for i, b := range data {
-		if b != 0x00 { // Find the first non-zero byte
-			return data[i:] // Slice from the first non-zero byte onward
-		}
-	}
-	return []byte{} // Return an empty slice if all bytes are zero
-}
-
-func extractTransactionCounter(ksn []byte) uint32 {
-	// Ensure the KSN is at least 3 bytes long
-	if len(ksn) < 3 {
-		panic("KSN must be at least 3 bytes long")
-	}
-
-	// The transaction counter is in the last 20 bits (3 bytes)
-	// Mask out the upper 4 bits of the first byte of the last 3 bytes
-	return uint32(ksn[len(ksn)-3]&0x1F)<<16 | // Mask upper 4 bits and shift to the most significant position
-		uint32(ksn[len(ksn)-2])<<8 | // Take the middle byte and shift it
-		uint32(ksn[len(ksn)-1]) // Add the least significant byte
-}
-
-func uint32To10ByteSlice(value uint32) []byte {
-	// Create a 10-byte slice initialized to zeros
-	result := make([]byte, 10)
-
-	// Convert the uint32 value to 4 bytes in big-endian order
-	binary.BigEndian.PutUint32(result[6:], value)
-
-	// Return the resulting 10-byte slice
-	return result
-}
-
-func repeatBytesTo16(key []byte) []byte {
-	if len(key) != 8 {
-		panic("Key must be 8 bytes long")
-	}
-
-	// Duplicate the 8-byte slice to make it 16 bytes
-	repeatedKey := append(key, key...)
-
-	return repeatedKey
 }
