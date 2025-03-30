@@ -5,78 +5,77 @@ import (
 	"crypto/cipher"
 	"crypto/des"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
+	"math/big"
 )
 
-var keyMask []byte
-var ksnMask []byte
+var keyMask *big.Int
+var ksnMask *big.Int
 
 func main() {
 
-	keyMask, _ = hex.DecodeString("C0C0C0C000000000C0C0C0C000000000")
-	ksnMask, _ = hex.DecodeString("FFFFFFFFFFFFFFE00000")
+	keyMask = new(big.Int)
+	keyMask.SetString("C0C0C0C000000000C0C0C0C000000000", 16)
 
-	bdk, _ := hex.DecodeString("0123456789ABCDEFFEDCBA9876543210")
-	ksn, _ := hex.DecodeString("FFFF9876543210E00008")
+	ksnMask = new(big.Int)
+	ksnMask.SetString("FFFFFFFFFFFFFFE00000", 16)
 
-	ipek := createIPEK(bdk, ksn)
-	fmt.Printf("ipek: %x\n", ipek)
-	createSessionKey(ipek, ksn)
+	bdk := new(big.Int)
+	bdk.SetString("0123456789ABCDEFFEDCBA9876543210", 16)
 
-}
+	ksn := new(big.Int)
+	ksn.SetString("FFFF9876543210E00008", 16)
 
-func createIPEK(bdk, ksn []byte) []byte {
-
-	ksn, _ = bitwiseAndBytes(ksn, ksnMask)
-	ksn = rightShiftBytes(ksn, 16)
-
-	ksn = trimLeadingZeros(ksn)
-
-	cipherTextLeft := tripleDesEncrypt(bdk, ksn)
-	xOrKey, _ := bitwiseXorBytes(bdk, keyMask)
-	cipherTextRight := tripleDesEncrypt(xOrKey, ksn)
-
-	result := append(cipherTextLeft, cipherTextRight...)
-
-	return result
+	ipek := createIPEK(*bdk, *ksn)
+	fmt.Printf("ipek: %x\n", &ipek)
+	createSessionKey(ipek, *ksn)
 
 }
 
-func createSessionKey(ipek, ksn []byte) {
+func createIPEK(bdk, ksn big.Int) big.Int {
 
-	sessionKeyMask, _ := hex.DecodeString("00000000000000FF00000000000000FF")
+	maskedKsn := new(big.Int).And(&ksn, ksnMask)
+	shiftedKsn := new(big.Int).Rsh(maskedKsn, 16)
 
-	fmt.Printf("ipek: %x\n", ipek)
+	cipherTextLeft := new(big.Int).SetBytes(tripleDesEncrypt(bdk.Bytes(), shiftedKsn.Bytes()))
+	cipherTextLeft.Lsh(cipherTextLeft, 64)
+
+	xOrKey := new(big.Int).Xor(&bdk, keyMask)
+	cipherTextRight := new(big.Int).SetBytes(tripleDesEncrypt(xOrKey.Bytes(), shiftedKsn.Bytes()))
+
+	ipek := new(big.Int).Or(cipherTextLeft, cipherTextRight)
+	return *ipek
+
+}
+
+func createSessionKey(ipek, ksn big.Int) {
+
+	sessionKeyMask, _ := new(big.Int).SetString("FF00000000000000FF", 16)
 
 	key := deriveKey(ipek, ksn)
 
-	fmt.Printf("final key: %x\n", key)
-
-	sessionKey, _ := bitwiseXorBytes(key, sessionKeyMask)
+	sessionKey := new(big.Int).Xor(&key, sessionKeyMask)
 
 	fmt.Printf("session key: %x\n", sessionKey)
 
 }
 
-func deriveKey(ipek, ksn []byte) []byte {
+func deriveKey(ipek, ksn big.Int) big.Int {
 
-	ksnReg, _ := bitwiseAndBytes(ksn, ksnMask)
-
-	fmt.Printf("initial : %x\n", ksnReg)
+	mask, _ := new(big.Int).SetString("FFFFFFFFFFE00000", 16)
+	ksnReg := new(big.Int).And(&ksn, mask)
 
 	currentKey := ipek
 
-	transactionCounter := extractTransactionCounter(ksn)
-	const mask uint32 = 0x1FFFFF
+	transactionCounterMask := new(big.Int).SetUint64(0x1FFFFF)
 
 	for shiftReg := 0x100000; shiftReg > 0; shiftReg >>= 1 {
-		if shiftReg&int(transactionCounter)&int(mask) > 0 {
-			ksnReg, _ = bitwiseOrBytes(ksnReg, uint32To10ByteSlice(uint32(shiftReg)))
-			fmt.Printf("current key: %x\n", currentKey)
-			fmt.Printf("ksnReg: %x\n", ksnReg)
-			currentKey = generateKey(currentKey, ksnReg)
-			print("\n\n")
+		bigShiftReg := new(big.Int).SetUint64(uint64(shiftReg))
+		result := new(big.Int).And(bigShiftReg, &ksn)
+		result.And(result, transactionCounterMask)
+		if result.Cmp(big.NewInt(0)) > 0 {
+			ksnReg.Or(ksnReg, bigShiftReg)
+			currentKey = generateKey(currentKey, *ksnReg)
 		}
 
 	}
@@ -85,54 +84,37 @@ func deriveKey(ipek, ksn []byte) []byte {
 
 }
 
-func generateKey(key, ksn []byte) []byte {
+func generateKey(key, ksn big.Int) big.Int {
 
-	maskedKey, _ := bitwiseXorBytes(key, keyMask)
+	maskedKey := new(big.Int).Xor(&key, keyMask)
 
-	encryptLeft := encryptRegister(maskedKey, ksn)
+	encryptLeft := encryptRegister(*maskedKey, ksn)
 	encryptRight := encryptRegister(key, ksn)
 
-	fmt.Printf("encrypt left: %x\n", encryptLeft)
-	fmt.Printf("encrypt right: %x\n", encryptRight)
+	encryptLeft.Lsh(&encryptLeft, 64)
 
-	// result, _ := bitwiseOrBytes(leftShiftBytes(encryptLeft, 64), encryptRight)
-
-	result := append(encryptLeft, encryptRight...)
-
-	fmt.Printf("encrypt result: %x\n", result)
-
-	return result
+	result := new(big.Int).Or(&encryptLeft, &encryptRight)
+	return *result
 
 }
 
-func encryptRegister(key, reg []byte) []byte {
+func encryptRegister(key, reg big.Int) big.Int {
 
-	fmt.Printf("key: %x\n", key)
+	maskLeft, _ := new(big.Int).SetString("FFFFFFFFFFFFFFFF0000000000000000", 16)
+	maskRight, _ := new(big.Int).SetString("FFFFFFFFFFFFFFFF", 16)
 
-	keyLeft := key[:8]
-	keyRight := key[8:]
+	keyLeft := new(big.Int).And(&key, maskLeft)
+	keyLeft.Rsh(keyLeft, 64)
+	keyRight := new(big.Int).And(&key, maskRight)
 
-	fmt.Printf("key left: %x\n", keyLeft)
-	fmt.Printf("key right: %x\n", keyRight)
-	fmt.Printf("reg: %x\n", reg)
+	keyReg := new(big.Int).Xor(keyRight, &reg)
 
-	keyReg, _ := bitwiseXorBytes(keyRight, reg[2:])
-
-	fmt.Printf("key reg: %x\n", keyReg)
-
-	tripleDESResult := desEncrypt(keyLeft, keyReg)
-
+	tripleDESResult := new(big.Int).SetBytes(desEncrypt(keyLeft.Bytes(), keyReg.Bytes()))
 	// tripleDESResult := tripleDesEncrypt(keyLeft, keyReg)
 
-	fmt.Printf("3des result: %x\n", tripleDESResult)
+	encryptionResult := new(big.Int).Xor(keyRight, tripleDESResult)
 
-	encryptionResult, _ := bitwiseXorBytes(keyRight, tripleDESResult)
-
-	fmt.Printf("encryption result: %x\n", encryptionResult)
-
-	print("\n")
-
-	return encryptionResult
+	return *encryptionResult
 
 }
 
