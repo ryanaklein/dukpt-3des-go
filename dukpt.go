@@ -13,21 +13,30 @@ var ksnMask *big.Int
 
 func main() {
 
-	keyMask = new(big.Int)
-	keyMask.SetString("C0C0C0C000000000C0C0C0C000000000", 16)
+	keyMask, _ = new(big.Int).SetString("C0C0C0C000000000C0C0C0C000000000", 16)
 
-	ksnMask = new(big.Int)
-	ksnMask.SetString("FFFFFFFFFFFFFFE00000", 16)
+	ksnMask, _ = new(big.Int).SetString("FFFFFFFFFFFFFFE00000", 16)
 
-	bdk := new(big.Int)
-	bdk.SetString("0123456789ABCDEFFEDCBA9876543210", 16)
+	bdk, _ := new(big.Int).SetString("0123456789ABCDEFFEDCBA9876543210", 16)
 
-	ksn := new(big.Int)
-	ksn.SetString("88888851400018400003", 16)
+	ksn, _ := new(big.Int).SetString("88888851400018400003", 16)
 
 	ipek := createIPEK(*bdk, *ksn)
-	fmt.Printf("ipek: %x\n", &ipek)
-	createDigitalKey(ipek, *ksn)
+	dek := createDigitalKey(ipek, *ksn)
+
+	plaintext, _ := new(big.Int).SetString("4111111111111111D301244455556660", 16)
+
+	plaintextTLV := createTLV57(plaintext)
+
+	plaintextPadded := padPKCS7BigInt(plaintextTLV, des.BlockSize)
+
+	plaintextPaddedTLV := updateTLV57(plaintextPadded)
+
+	ciphertext := new(big.Int).SetBytes(tripleDesEncrypt(dek.Bytes(), plaintextPaddedTLV.Bytes()))
+
+	ciphertextTLV := createTLV57(ciphertext)
+
+	fmt.Printf("ciphertext: %x\n", ciphertextTLV)
 
 }
 
@@ -47,7 +56,7 @@ func createIPEK(bdk, ksn big.Int) big.Int {
 
 }
 
-func createDigitalKey(ipek, ksn big.Int) {
+func createDigitalKey(ipek, ksn big.Int) big.Int {
 	digitalKeyMask, _ := new(big.Int).SetString("0000000000FF00000000000000FF0000", 16)
 
 	// Derive the base key
@@ -68,7 +77,7 @@ func createDigitalKey(ipek, ksn big.Int) {
 
 	result := new(big.Int).Or(cipherTextLeft, cipherTextRight)
 
-	fmt.Printf("dek: %x\n", result)
+	return *result
 
 }
 
@@ -201,4 +210,63 @@ func padPKCS7(data []byte, blockSize int) []byte {
 	padding := blockSize - len(data)%blockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(data, padtext...)
+}
+
+func padPKCS7BigInt(data *big.Int, blockSize int) *big.Int {
+	// Convert the big.Int to a byte slice
+	dataBytes := data.Bytes()
+
+	// Calculate the padding length
+	padding := blockSize - len(dataBytes)%blockSize
+
+	// Create the padding bytes
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+
+	// Append the padding to the data
+	paddedBytes := append(dataBytes, padtext...)
+
+	// Convert the padded byte slice back to a big.Int
+	paddedBigInt := new(big.Int).SetBytes(paddedBytes)
+
+	return paddedBigInt
+}
+
+func createTLV57(plaintext *big.Int) *big.Int {
+	// Convert the big.Int to a byte slice
+	plaintextBytes := plaintext.Bytes()
+
+	// Calculate the length in bytes
+	lengthInBytes := len(plaintextBytes)
+
+	// Construct the TLV as a byte slice
+	tlvBytes := append([]byte{0x57, byte(lengthInBytes)}, plaintextBytes...)
+
+	// Convert the TLV byte slice back to a big.Int
+	tlvBigInt := new(big.Int).SetBytes(tlvBytes)
+
+	return tlvBigInt
+}
+
+func updateTLV57(tlv *big.Int) *big.Int {
+	// Convert the TLV big.Int to a byte slice
+	tlvBytes := tlv.Bytes()
+
+	// Ensure the TLV has at least a tag and length (minimum 2 bytes)
+	if len(tlvBytes) < 2 {
+		panic("Invalid TLV: too short to contain a tag and length")
+	}
+
+	// Extract the value portion of the TLV (everything after the first 2 bytes)
+	valueBytes := tlvBytes[2:]
+
+	// Recalculate the length of the value
+	lengthInBytes := len(valueBytes)
+
+	// Construct the updated TLV as a byte slice
+	updatedTLVBytes := append([]byte{0x57, byte(lengthInBytes)}, valueBytes...)
+
+	// Convert the updated TLV byte slice back to a big.Int
+	updatedTLV := new(big.Int).SetBytes(updatedTLVBytes)
+
+	return updatedTLV
 }
